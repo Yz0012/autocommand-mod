@@ -1,8 +1,12 @@
-# Fabric Example Mod
+# Auto Command Mod
 
-## Setup
+## What is this?
 
-For setup instructions please see the [fabric documentation page](https://docs.fabricmc.net/develop/getting-started/setting-up) that relates to the IDE that you are using.
+This is a fabric mod.
+
+## What is the point of this?
+
+It is designed to control when commands are executed.
 
 ## License
 
