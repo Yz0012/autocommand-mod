@@ -1,35 +1,30 @@
 package com.autocommand;
 
+import com.autocommand.scheduler.ModCommands;
+import com.autocommand.scheduler.TaskScheduler;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.autocommand.Scheduler.JsonlFileManager;
-import com.autocommand.Scheduler.ModCommands;
-import com.autocommand.Scheduler.TaskScheduler;
-
-/**
- * Main entry point for the mod.
- * 模组的主入口点。
- */
 public class ExampleMod implements ModInitializer {
-    public static final String MOD_ID = "taskmod";
+    public static final String MOD_ID = "scheduler_mod";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+
+    // Singleton instance of scheduler
+    private static TaskScheduler scheduler;
 
     @Override
     public void onInitialize() {
-        LOGGER.info("Initializing TaskMod...");
+        LOGGER.info("Initializing Scheduler Mod for 1.21.1");
 
-        // Initialize File System
-        // 初始化文件系统
-        JsonlFileManager.init();
+        // Initialize Logic / 初始化逻辑
+        scheduler = new TaskScheduler();
+        scheduler.register(); // Start ticking / 开始 tick 监听
 
-        // Register Commands
-        // 注册指令
-        ModCommands.register();
-
-        // Register Tick Scheduler
-        // 注册Tick调度器
-        TaskScheduler.register();
+        // Register Commands / 注册指令
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            ModCommands.register(dispatcher, scheduler);
+        });
     }
 }

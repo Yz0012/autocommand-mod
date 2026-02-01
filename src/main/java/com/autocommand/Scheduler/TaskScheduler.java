@@ -1,152 +1,153 @@
-package com.autocommand.Scheduler;
+package com.autocommand.scheduler;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
- * Handles the logic for checking time and executing commands.
- * 处理检查时间和执行指令的逻辑。
+ * Main Logic for checking and executing tasks.
+ * 检查和执行任务的主逻辑。
  */
 public class TaskScheduler {
-    private static final Logger LOGGER = LoggerFactory.getLogger("TaskMod-Scheduler");
-    // In-memory cache of pending tasks to avoid reading IO every tick.
-    // 待处理任务的内存缓存，避免每一Tick都读取IO。
-    private static final Map<String, TaskData> PENDING_TASKS = new ConcurrentHashMap<>();
+    private final JsonlFileManager fileManager;
+    private List<Task> memoryCache;
+    @SuppressWarnings("unused")
+    private long lastCheckTime = 0;
 
-    private static long lastFileCheck = 0;
+    public TaskScheduler() {
+        this.fileManager = new JsonlFileManager();
+        this.memoryCache = new ArrayList<>();
+        // Load initially / 初始化加载
+        refreshCache();
+    }
 
-    /**
-     * Registers the tick listener.
-     * 注册Tick监听器。
-     */
-    public static void register() {
-        ServerTickEvents.END_SERVER_TICK.register(TaskScheduler::onTick);
+    public void register() {
+        // Execute at the end of server tick
+        // 在服务器 tick 结束时执行
+        ServerTickEvents.END_SERVER_TICK.register(this::onTick);
+    }
+
+    private void refreshCache() {
+        this.memoryCache = fileManager.loadAllTasks();
     }
 
     /**
-     * Called every server tick.
-     * 每个服务端Tick被调用。
-     *
-     * @param server The Minecraft server instance / Minecraft服务器实例
+     * Called every tick.
+     * 每个 tick 调用。
      */
-    private static void onTick(MinecraftServer server) {
-        long now = System.currentTimeMillis();
+    private void onTick(MinecraftServer server) {
+        // 1. Monitor file changes (Simulated logic, or rely on internal state)
+        // 1. 监听文件更改 (模拟逻辑，或者依赖内部状态)
+        // For this example, we assume we drive the data, but if external change is
+        // detected:
+        // 在此示例中，假设我们驱动数据，但如果检测到外部更改：
+        // if (fileManager.hasChanges()) refreshCache();
 
-        // Periodically sync from files (e.g., every 5 seconds) or relies on commands
-        // updating memory.
-        // For this example, we sync when map is empty or just check the map.
-        // If file modification needs to be detected strictly from external edits:
-        // 如果需要严格检测外部编辑的文件修改：
-        if (now - lastFileCheck > 2000) { // Check every 2 seconds / 每2秒检查一次
-            reloadFromDisk();
-            lastFileCheck = now;
-        }
-
-        Iterator<Map.Entry<String, TaskData>> it = PENDING_TASKS.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, TaskData> entry = it.next();
-            TaskData task = entry.getValue();
-
-            long diff = now - task.targetTime;
-
-            // "Within 1s" logic: If current time is past target, but within 1s window (or
-            // just past it).
-            // Logic: If now >= targetTime.
-            // "1s内"逻辑：如果当前时间超过目标时间。
-            if (diff >= 0) {
-                if (diff <= 1000) {
-                    // Execute
-                    executeTask(server, task);
-                } else {
-                    // Too late, mark as missed/expired or execute anyway?
-                    // Prompt says: "Past time... add executed/unexecuted label".
-                    // Assuming we execute if close, mark expired if too old.
-                    // 假设接近则执行，太旧则标记过期。
-                    LOGGER.warn("Task " + task.id + " missed its window by " + diff + "ms. Executing anyway.");
-                    executeTask(server, task);
-                }
-
-                // Remove from current pending check
-                it.remove();
-            }
-        }
-    }
-
-    /**
-     * Reloads tasks from JSONL into memory.
-     * 从JSONL重新加载任务到内存。
-     */
-    public static void reloadFromDisk() {
-        List<TaskData> disksTasks = JsonlFileManager.readPendingTasks();
-        // Simple merge: Add if not exists.
-        for (TaskData t : disksTasks) {
-            PENDING_TASKS.putIfAbsent(t.id, t);
-        }
-    }
-
-    /**
-     * Adds a task to memory and disk.
-     * 将任务添加到内存和磁盘。
-     */
-    public static void scheduleTask(TaskData task) {
-        JsonlFileManager.appendTask(task);
-        PENDING_TASKS.put(task.id, task);
-    }
-
-    /**
-     * Cancels a task.
-     * 取消任务。
-     */
-    public static boolean cancelTask(String id) {
-        if (PENDING_TASKS.containsKey(id)) {
-            PENDING_TASKS.remove(id);
-            JsonlFileManager.updateTaskStatus(id, "CANCELLED");
-            return true;
-        }
-        // Also check disk even if not in memory
-        JsonlFileManager.updateTaskStatus(id, "CANCELLED");
-        return false;
-    }
-
-    /**
-     * Executes the task command and handles looping.
-     * 执行任务指令并处理循环。
-     */
-    @SuppressWarnings("null")
-    private static void executeTask(MinecraftServer server, TaskData task) {
-        LOGGER.info("Executing task: " + task.command);
-
+        long now = Instant.now().toEpochMilli();
+        boolean needsSave = false;
         CommandSourceStack source = server.createCommandSourceStack();
 
-        try {
-            server.getCommands().performPrefixedCommand(source, task.command);
-
-            // Update status on disk
-            JsonlFileManager.updateTaskStatus(task.id, "EXECUTED");
-
-            // Handle Loop
-            // 处理循环
-            if (task.isLoop) {
-                long nextTime = System.currentTimeMillis() + (task.loopIntervalSeconds * 1000L);
-                TaskData nextTask = new TaskData(
-                        UUID.randomUUID().toString().substring(0, 8),
-                        nextTime,
-                        task.command,
-                        true,
-                        task.loopIntervalSeconds,
-                        "PENDING");
-                scheduleTask(nextTask); // Add new entry for next loop
-                LOGGER.info("Rescheduled loop task: " + nextTask.id);
+        // 2. Find nearest tasks
+        // 2. 查找最近的任务
+        // Filter pending tasks / 过滤待处理任务
+        List<Task> pendingTasks = new ArrayList<>();
+        for (Task t : memoryCache) {
+            if ("PENDING".equals(t.status)) {
+                pendingTasks.add(t);
             }
-
-        } catch (Exception e) {
-            LOGGER.error("Error executing task command", e);
         }
+
+        // Sort by time / 按时间排序
+        pendingTasks.sort(Comparator.comparingLong(t -> t.scheduledTime));
+
+        for (Task task : pendingTasks) {
+            long diff = task.scheduledTime - now;
+
+            // Logic: If task time is within 1s (1000ms) or already passed
+            // 逻辑：如果任务时间在 1秒 (1000ms) 内或已经过去
+            if (diff <= 1000) {
+                // Execute / 执行
+                executeTask(server, source, task);
+
+                // Mark status / 标记状态
+                task.status = "EXECUTED";
+
+                // If it's a loop task, add a new future task
+                // 如果是循环任务，添加一个新的未来任务
+                if ("LOOP".equals(task.type)) {
+                    Task nextTask = new Task(task.command, now + (task.interval * 1000), "LOOP", task.interval);
+                    memoryCache.add(nextTask); // Add to cache immediately / 立即添加到缓存
+                }
+
+                needsSave = true;
+            } else {
+                // If the nearest task is far in future, we can stop checking others (since
+                // sorted)
+                // 如果最近的任务还在很远的未来，可以停止检查其他任务（因为已排序）
+                break;
+            }
+        }
+
+        // 3. Save if changes happened
+        // 3. 如果发生更改则保存
+        if (needsSave) {
+            fileManager.saveAllTasks(memoryCache);
+        }
+    }
+
+    @SuppressWarnings("null")
+    private void executeTask(MinecraftServer server, CommandSourceStack source, Task task) {
+        try {
+            System.out.println("Executing Task: " + task.command);
+            server.getCommands().performPrefixedCommand(source, task.command);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Public API to add task from command
+    // 从指令添加任务的公共 API
+    public void scheduleTask(String command, int delaySeconds, boolean loop, int loopInterval) {
+        long targetTime = Instant.now().toEpochMilli() + (delaySeconds * 1000L);
+        Task task = new Task(command, targetTime, loop ? "LOOP" : "ONCE", loopInterval);
+
+        // Add to cache and write directly
+        // 添加到缓存并直接写入
+        memoryCache.add(task);
+        fileManager.addTask(task); // Appends to file immediately / 立即追加到文件
+    }
+
+    // Public API to stop tasks containing a specific command string
+    // 停止包含特定指令字符串的任务的公共 API
+    public int stopTasks(String commandMatch) {
+        int count = 0;
+        boolean needsSave = false;
+        long now = Instant.now().toEpochMilli();
+
+        // Iterate and remove future tasks
+        // 遍历并移除未来任务
+        // Using removeIf or Iterator is safer
+        // 使用 removeIf 或 Iterator 更安全
+        for (int i = 0; i < memoryCache.size(); i++) {
+            Task t = memoryCache.get(i);
+            // Check if future and matches command / 检查是否为未来任务且匹配指令
+            if ("PENDING".equals(t.status) && t.scheduledTime > now && t.command.contains(commandMatch)) {
+                // Ideally mark cancelled or remove. Prompt says "remove future tasks".
+                // 理想情况下标记为取消或移除。提示要求 "去除任务"。
+                memoryCache.remove(i);
+                i--;
+                count++;
+                needsSave = true;
+            }
+        }
+
+        if (needsSave) {
+            fileManager.saveAllTasks(memoryCache);
+        }
+        return count;
     }
 }
